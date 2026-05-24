@@ -9,6 +9,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import mineverse.Aust1n46.chat.MineverseChat;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import org.apache.commons.lang.StringUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
@@ -47,6 +50,11 @@ public class Format {
 			"(?<!(&x(&[a-fA-F0-9]){5}))(?<!(&x(&[a-fA-F0-9]){4}))(?<!(&x(&[a-fA-F0-9]){3}))(?<!(&x(&[a-fA-F0-9]){2}))(?<!(&x(&[a-fA-F0-9]){1}))(?<!(&x))(&)([0-9a-fA-F])");
 	
 	private static final Pattern PLACEHOLDERAPI_PLACEHOLDER_PATTERN = Pattern.compile("\\{([^\\{\\}]+)\\}");
+
+	private static final Pattern MINIMESSAGE_TAG_PATTERN = Pattern.compile("</?[a-zA-Z][\\w-]*(?::[^>]*)?>");
+
+	private static final Pattern BUKKIT_HEX_COLOR_PATTERN = Pattern.compile(
+			BUKKIT_COLOR_CODE_PREFIX + "x((?:" + BUKKIT_COLOR_CODE_PREFIX + "[0-9a-fA-F]){6})");
 	
 	public static final long MILLISECONDS_PER_DAY = 86400000;
 	public static final long MILLISECONDS_PER_HOUR = 3600000;
@@ -67,11 +75,21 @@ public class Format {
      */
 	public static String convertToJson(MineverseChatPlayer sender, String format, String chat) {
 		JsonFormat JSONformat = JsonFormat.getJsonFormat(sender.getJsonFormat());
-		String c = escapeJsonChars(chat);
-		String json = "[\"\",{\"text\":\"\",\"extra\":[";
-		json += convertPlaceholders(format, JSONformat, sender);
-		json += "]}";
-		json += "," + convertLinks(c);
+		boolean canMiniMessage = sender.getPlayer().hasPermission("venturechat.minimessage");
+		String expandedFormat = PlaceholderAPI.setBracketPlaceholders(sender.getPlayer(), format);
+		String json = "[\"\"";
+		if (canMiniMessage && MINIMESSAGE_TAG_PATTERN.matcher(expandedFormat).find()) {
+			json += "," + FormatStringMiniMessage(stripColor(expandedFormat));
+		} else {
+			json += ",{\"text\":\"\",\"extra\":[";
+			json += convertPlaceholders(format, JSONformat, sender);
+			json += "]}";
+		}
+		if (canMiniMessage && MINIMESSAGE_TAG_PATTERN.matcher(chat).find()) {
+			json += "," + FormatStringMiniMessage(stripColor(restoreHexColors(chat)));
+		} else {
+			json += "," + convertLinks(escapeJsonChars(chat));
+		}
 		json += "]";
 		if (getInstance().getConfig().getString("loglevel", "info").equals("debug")) {
 			System.out.println(json);
@@ -697,6 +715,19 @@ public class Format {
 	}
 
 	/**
+	 * Parses a MiniMessage string and serializes it to Minecraft JSON so hover,
+	 * click and other rich events are preserved end-to-end.
+	 *
+	 * @param string to format.
+	 * @return {@link String}
+	 */
+	public static String FormatStringMiniMessage(String string) {
+		Component component = MiniMessage.miniMessage().deserialize(string);
+		String allFormated = GsonComponentSerializer.gson().serialize(component);
+		return allFormated;
+	}
+
+	/**
      * Formats a string with Spigot formatting codes.
      *
      * @param string to format.
@@ -992,5 +1023,16 @@ public class Format {
 	
 	public static String stripColor(String message) {
 		return message.replaceAll("(\u00A7([a-z0-9]))", "");
+	}
+
+	public static String restoreHexColors(String message) {
+		Matcher matcher = BUKKIT_HEX_COLOR_PATTERN.matcher(message);
+		StringBuilder sb = new StringBuilder();
+		while (matcher.find()) {
+			String hex = matcher.group(1).replace(BUKKIT_COLOR_CODE_PREFIX, "");
+			matcher.appendReplacement(sb, HEX_COLOR_CODE_PREFIX + hex);
+		}
+		matcher.appendTail(sb);
+		return sb.toString();
 	}
 }
