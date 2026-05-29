@@ -79,14 +79,14 @@ public class Format {
 		String expandedFormat = PlaceholderAPI.setBracketPlaceholders(sender.getPlayer(), format);
 		String json = "[\"\"";
 		if (canMiniMessage && MINIMESSAGE_TAG_PATTERN.matcher(expandedFormat).find()) {
-			json += "," + FormatStringMiniMessage(stripColor(expandedFormat));
+			json += "," + FormatStringMiniMessage(convertLegacyToMiniMessage(expandedFormat));
 		} else {
 			json += ",{\"text\":\"\",\"extra\":[";
 			json += convertPlaceholders(format, JSONformat, sender);
 			json += "]}";
 		}
 		if (canMiniMessage && MINIMESSAGE_TAG_PATTERN.matcher(chat).find()) {
-			json += "," + FormatStringMiniMessage(stripColor(restoreHexColors(chat)));
+			json += "," + FormatStringMiniMessage(convertLegacyToMiniMessage(chat));
 		} else {
 			json += "," + convertLinks(escapeJsonChars(chat));
 		}
@@ -722,9 +722,116 @@ public class Format {
 	 * @return {@link String}
 	 */
 	public static String FormatStringMiniMessage(String string) {
-		Component component = MiniMessage.miniMessage().deserialize(string);
-		String allFormated = GsonComponentSerializer.gson().serialize(component);
-		return allFormated;
+		try {
+			Component component = MiniMessage.miniMessage().deserialize(string);
+			return GsonComponentSerializer.gson().serialize(component);
+		} catch (Exception e) {
+			// MiniMessage rejects stray legacy color codes and malformed tags that a
+			// player can type. Fall back to plain text so a single bad message never
+			// throws and blocks the whole chat pipeline.
+			return "{\"text\":\"" + escapeJsonChars(stripColor(string)) + "\"}";
+		}
+	}
+
+	/**
+	 * Converts legacy section ({@code §}) color and formatting codes into their
+	 * MiniMessage tag equivalents so they survive a MiniMessage parse instead of
+	 * being stripped (losing the color) or throwing. Handles Bukkit hex codes
+	 * ({@code §x§R§R§G§G§B§B} → {@code <#RRGGBB>}), the 16 named colors and the
+	 * formatting/reset codes. This preserves legacy gradients (per-character hex)
+	 * embedded in nicknames, prefixes and messages. Any unrecognized {@code §}
+	 * code is dropped so no legacy section symbol ever reaches the parser.
+	 *
+	 * @param string to convert.
+	 * @return {@link String}
+	 */
+	public static String convertLegacyToMiniMessage(String string) {
+		StringBuilder sb = new StringBuilder(string.length());
+		char[] chars = string.toCharArray();
+		for (int i = 0; i < chars.length; i++) {
+			char c = chars[i];
+			if (c != BUKKIT_COLOR_CODE_PREFIX_CHAR || i + 1 >= chars.length) {
+				sb.append(c);
+				continue;
+			}
+			char code = Character.toLowerCase(chars[i + 1]);
+			if (code == 'x') {
+				String hex = readBukkitHexColor(chars, i);
+				if (hex != null) {
+					sb.append('<').append(HEX_COLOR_CODE_PREFIX).append(hex).append('>');
+					i += 13;
+					continue;
+				}
+			}
+			String tag = legacyCodeToMiniMessageTag(code);
+			if (tag != null) {
+				sb.append(tag);
+			}
+			// Consume the code character. Unrecognized codes are dropped entirely so
+			// a stray legacy section symbol never reaches the MiniMessage parser.
+			i++;
+		}
+		return sb.toString();
+	}
+
+	/**
+	 * Reads a Bukkit hex color sequence ({@code §x§R§R§G§G§B§B}) beginning at the
+	 * given index and returns the six hex digits, or {@code null} if the sequence
+	 * is incomplete or malformed.
+	 *
+	 * @param chars source characters.
+	 * @param start index of the {@code §} preceding the {@code x}.
+	 * @return {@link String}
+	 */
+	private static String readBukkitHexColor(char[] chars, int start) {
+		if (start + 13 >= chars.length) {
+			return null;
+		}
+		StringBuilder hex = new StringBuilder(6);
+		for (int j = 0; j < 6; j++) {
+			char prefix = chars[start + 2 + j * 2];
+			char digit = chars[start + 3 + j * 2];
+			if (prefix != BUKKIT_COLOR_CODE_PREFIX_CHAR || Character.digit(digit, 16) < 0) {
+				return null;
+			}
+			hex.append(digit);
+		}
+		return hex.toString();
+	}
+
+	/**
+	 * Maps a single legacy color/formatting code character to its MiniMessage tag,
+	 * or {@code null} if it is not a recognized code.
+	 *
+	 * @param code lowercase legacy code character.
+	 * @return {@link String}
+	 */
+	private static String legacyCodeToMiniMessageTag(char code) {
+		switch (code) {
+			case '0': return "<black>";
+			case '1': return "<dark_blue>";
+			case '2': return "<dark_green>";
+			case '3': return "<dark_aqua>";
+			case '4': return "<dark_red>";
+			case '5': return "<dark_purple>";
+			case '6': return "<gold>";
+			case '7': return "<gray>";
+			case '8': return "<dark_gray>";
+			case '9': return "<blue>";
+			case 'a': return "<green>";
+			case 'b': return "<aqua>";
+			case 'c': return "<red>";
+			case 'd': return "<light_purple>";
+			case 'e': return "<yellow>";
+			case 'f': return "<white>";
+			case 'k': return "<obfuscated>";
+			case 'l': return "<bold>";
+			case 'm': return "<strikethrough>";
+			case 'n': return "<underlined>";
+			case 'o': return "<italic>";
+			case 'r': return "<reset>";
+			default: return null;
+		}
 	}
 
 	/**
@@ -1022,7 +1129,7 @@ public class Format {
 	}
 	
 	public static String stripColor(String message) {
-		return message.replaceAll("(\u00A7([a-z0-9]))", "");
+		return message.replaceAll("(\u00A7([a-zA-Z0-9]))", "");
 	}
 
 	public static String restoreHexColors(String message) {

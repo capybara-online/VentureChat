@@ -467,7 +467,7 @@ public class MineverseChat extends JavaPlugin implements PluginMessageListener {
 				}	
 				
 				String json = Format.convertPlainTextToJson(message, true);
-				int hash = (message.replaceAll("([�]([a-z0-9]))", "")).hashCode();
+				int hash = (message.replaceAll("([�]([a-zA-Z0-9]))", "")).hashCode();
 				
 				for(MineverseChatPlayer p : MineverseChatAPI.getOnlineMineverseChatPlayers()) {
 					if(p.isListening(chatChannelObj.getName())) {
